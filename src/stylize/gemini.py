@@ -1,89 +1,112 @@
 """Style transfer using Google Gemini API (free tier)."""
 
-import base64
+import os
+import re
 import time
 from pathlib import Path
 
 from google import genai
 from google.genai import types
-from PIL import Image
 from rich.console import Console
-from rich.progress import track
+
+from .engine import StyleConfig, StyleEngine, StyleResult
 
 console = Console()
 
-
-def _load_image_bytes(path: Path) -> bytes:
-    with open(path, "rb") as f:
-        return f.read()
+DEFAULT_MODEL = "gemini-2.0-flash-exp-image-generation"
 
 
-def stylize_keyframe(
-    client: genai.Client,
-    image_path: Path,
-    style_prompt: str,
-    output_path: Path,
-    model: str = "gemini-2.0-flash-exp",
-) -> Path | None:
-    """Stylize a single keyframe using Gemini image generation.
-
-    Returns the output path on success, None on failure.
-    """
-    image_bytes = _load_image_bytes(image_path)
-
-    response = client.models.generate_content(
-        model=model,
-        contents=[
-            types.Content(
-                parts=[
-                    types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
-                    types.Part.from_text(style_prompt),
-                ],
-            ),
-        ],
-        config=types.GenerateContentConfig(
-            response_modalities=["IMAGE", "TEXT"],
-        ),
-    )
-
-    # Extract generated image from response
-    for part in response.candidates[0].content.parts:
-        if part.inline_data and part.inline_data.mime_type.startswith("image/"):
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, "wb") as f:
-                f.write(part.inline_data.data)
-            return output_path
-
-    console.print(f"[yellow]Warning: No image in response for {image_path.name}[/yellow]")
+def _parse_retry_delay(error_msg: str) -> float | None:
+    """Extract retry delay from a 429 error message."""
+    match = re.search(r"retry in ([\d.]+)s", error_msg, re.IGNORECASE)
+    if match:
+        return float(match.group(1))
+    match = re.search(r'"retryDelay":\s*"(\d+)s"', error_msg)
+    if match:
+        return float(match.group(1))
     return None
 
 
-def stylize_keyframes(
-    keyframes: list[Path],
-    style_prompt: str,
-    output_dir: Path,
-    api_key: str | None = None,
-    model: str = "gemini-2.0-flash-exp",
-    delay_seconds: float = 4.5,
-) -> list[Path]:
-    """Stylize a batch of keyframes using Gemini.
+class GeminiEngine(StyleEngine):
+    """Gemini API style transfer engine."""
 
-    Free tier limit is ~15 RPM, so we add a delay between requests.
-    """
-    client = genai.Client(api_key=api_key) if api_key else genai.Client()
-    output_dir.mkdir(parents=True, exist_ok=True)
+    def __init__(
+        self,
+        api_key: str | None = None,
+        model: str = DEFAULT_MODEL,
+        delay: float = 5.0,
+        max_retries: int = 3,
+    ):
+        self.model = model
+        self.delay = delay
+        self.max_retries = max_retries
+        self.client: genai.Client | None = None
+        self.style_config: StyleConfig | None = None
 
-    styled = []
-    for kf in track(keyframes, description="Stylizing keyframes..."):
-        output_path = output_dir / kf.name
-        result = stylize_keyframe(client, kf, style_prompt, output_path, model=model)
-        if result:
-            styled.append(result)
-        else:
-            console.print(f"[red]Failed: {kf.name}[/red]")
+        key = api_key or os.environ.get("GEMINI_API_KEY")
+        if not key:
+            raise ValueError(
+                "No Gemini API key found. "
+                "Set GEMINI_API_KEY in .env or pass --api-key."
+            )
+        self._api_key = key
 
-        # Rate limit: free tier is ~15 RPM
-        time.sleep(delay_seconds)
+    def load(self, style_config: StyleConfig) -> None:
+        self.style_config = style_config
+        self.client = genai.Client(api_key=self._api_key)
+        console.print(f"[green]Gemini engine ready (model: {self.model})[/green]")
 
-    console.print(f"[green]Stylized {len(styled)}/{len(keyframes)} keyframes[/green]")
-    return styled
+    def stylize_frame(self, image_path: Path, output_path: Path) -> StyleResult:
+        if self.client is None or self.style_config is None:
+            return StyleResult(output_path, False, "Engine not loaded. Call load() first.")
+
+        with open(image_path, "rb") as f:
+            image_bytes = f.read()
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=[
+                        types.Content(
+                            parts=[
+                                types.Part.from_bytes(data=image_bytes, mime_type="image/png"),
+                                types.Part.from_text(text=self.style_config.prompt),
+                            ],
+                        ),
+                    ],
+                    config=types.GenerateContentConfig(
+                        response_modalities=["IMAGE", "TEXT"],
+                    ),
+                )
+
+                if response.candidates:
+                    for part in response.candidates[0].content.parts:
+                        if part.inline_data and part.inline_data.mime_type.startswith("image/"):
+                            output_path.parent.mkdir(parents=True, exist_ok=True)
+                            with open(output_path, "wb") as f:
+                                f.write(part.inline_data.data)
+                            return StyleResult(output_path, True)
+
+                return StyleResult(output_path, False, "No image in API response")
+
+            except Exception as e:
+                error_msg = str(e)
+                is_rate_limit = "429" in error_msg or "RESOURCE_EXHAUSTED" in error_msg
+
+                if is_rate_limit and attempt < self.max_retries:
+                    retry_delay = _parse_retry_delay(error_msg) or 60.0
+                    console.print(
+                        f"[yellow]Rate limited, waiting {retry_delay:.0f}s "
+                        f"(attempt {attempt + 1}/{self.max_retries})...[/yellow]"
+                    )
+                    time.sleep(retry_delay + 2)
+                    continue
+
+                return StyleResult(output_path, False, error_msg[:200])
+
+        return StyleResult(output_path, False, "Max retries exceeded")
+
+    def unload(self) -> None:
+        self.client = None
+        self.style_config = None

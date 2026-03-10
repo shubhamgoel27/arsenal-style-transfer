@@ -1,30 +1,80 @@
 styles:
   spiderverse:
+    # Gemini prompt (used by gemini backend)
     prompt: "Redraw this image in Spider-Man Into the Spider-Verse animation style. Use bold ink outlines, halftone dot patterns, ink splatter effects, vibrant saturated colors, and comic book Ben-Day dots. Keep the exact same composition, player positions, and action."
+    # SD-specific params (used by local_sd backend)
+    negative_prompt: "photorealistic, blurry, low quality, watermark, text, 3d render"
+    lora: "spiderverse.safetensors"
+    lora_weight: 0.85
+    trigger_words: "spiderverse style"
+    denoising_strength: 0.75
+    controlnet_conditioning_scale: 0.7
+    num_inference_steps: 20
+    guidance_scale: 7.5
     fps: 12
-    keyframe_interval: 12  # stylize every Nth frame
+    keyframe_interval: 12
 
   pokemon:
     prompt: "Redraw this image in Pokemon anime style. Use flat cel-shaded colors, bold black outlines, simple clean shapes, bright saturated palette. Keep the exact same composition, player positions, and action."
+    negative_prompt: "photorealistic, blurry, low quality, watermark, text"
+    lora: "pokemon.safetensors"
+    lora_weight: 0.8
+    trigger_words: "pokemon style"
+    denoising_strength: 0.65
+    controlnet_conditioning_scale: 0.8
+    num_inference_steps: 20
+    guidance_scale: 7.5
     fps: 12
     keyframe_interval: 12
 
   ghibli:
     prompt: "Redraw this image in Studio Ghibli animation style. Use soft watercolor textures, warm gentle lighting, painterly backgrounds, subtle color gradients. Keep the exact same composition, player positions, and action."
+    negative_prompt: "photorealistic, sharp edges, neon colors, low quality, text"
+    lora: "ghibli.safetensors"
+    lora_weight: 0.8
+    trigger_words: "studio ghibli style"
+    denoising_strength: 0.55
+    controlnet_conditioning_scale: 0.85
+    num_inference_steps: 20
+    guidance_scale: 7.5
     fps: 12
     keyframe_interval: 12
 
   comic_book:
     prompt: "Redraw this image as a dramatic comic book panel. Use thick black ink outlines, bold colors, strong shadows, action lines, dramatic lighting. Keep the exact same composition, player positions, and action."
+    negative_prompt: "photorealistic, blurry, low quality, watermark, soft"
+    lora: "comics.safetensors"
+    lora_weight: 0.85
+    trigger_words: ""
+    denoising_strength: 0.65
+    controlnet_conditioning_scale: 0.75
+    num_inference_steps: 20
+    guidance_scale: 7.5
     fps: 12
     keyframe_interval: 12
 
   pixel_art:
     prompt: "Redraw this image as 16-bit pixel art in retro video game style. Use a limited color palette, visible pixels, clean pixel-perfect shapes. Keep the exact same composition, player positions, and action."
+    negative_prompt: "photorealistic, blurry, high resolution, smooth gradients, text"
+    lora: "pixel_art.safetensors"
+    lora_weight: 0.85
+    trigger_words: "PixelArt"
+    denoising_strength: 0.75
+    controlnet_conditioning_scale: 0.7
+    num_inference_steps: 20
+    guidance_scale: 7.5
     fps: 12
     keyframe_interval: 12
 
   ukiyo_e:
     prompt: "Redraw this image as a Japanese ukiyo-e woodblock print. Use flat color areas, bold flowing outlines, traditional Japanese art composition. Keep the exact same composition, player positions, and action."
+    negative_prompt: "photorealistic, blurry, modern, digital, low quality, text"
+    lora: "ukiyo_e.safetensors"
+    lora_weight: 0.8
+    trigger_words: "ukiyo-e style"
+    denoising_strength: 0.55
+    controlnet_conditioning_scale: 0.85
+    num_inference_steps: 20
+    guidance_scale: 7.5
     fps: 12
     keyframe_interval: 12

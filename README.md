@@ -7,14 +7,14 @@ Convert Arsenal FC match highlights into different animation styles — Spiderve
 ```
 [Source Clips] → [Extract Frames] → [Style Transfer] → [Compose Video]
      │                 │                   │                   │
-  ScoreBat API     FFmpeg @ 12fps     Gemini API          FFmpeg
-  YouTube search   Scene detection    or manual upload     + audio merge
-  Local files      Keyframe selection                      + side-by-side
+  ScoreBat API     FFmpeg @ 12fps     Local SD (MPS)      FFmpeg
+  YouTube search   Scene detection    or Gemini API        + audio merge
+  Local files      Keyframe selection or manual upload     + side-by-side
 ```
 
 1. **Source** — Find Arsenal highlights via ScoreBat, search YouTube, or use local files
 2. **Process** — Extract frames at a target FPS and select keyframes for style transfer
-3. **Stylize** — Run keyframes through Gemini API or manually upload to any image tool
+3. **Stylize** — Run keyframes through local Stable Diffusion (default), Gemini API, or manual upload
 4. **Compose** — Stitch styled frames back into a video with optional audio and comparison
 
 ## Setup
@@ -24,6 +24,7 @@ Convert Arsenal FC match highlights into different animation styles — Spiderve
 - **Python 3.11+**
 - **[FFmpeg](https://ffmpeg.org/)** — installed and on PATH (`brew install ffmpeg` on macOS)
 - **[uv](https://docs.astral.sh/uv/)** — Python package manager (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
+- **Apple Silicon Mac** (recommended) — for local SD style transfer via MPS
 
 ### Install
 
@@ -33,17 +34,32 @@ cd arsenal-style-transfer
 uv sync
 ```
 
+Models (~3GB) are downloaded automatically from HuggingFace on first run.
+
 ### Gemini API key (optional)
 
-Required only for automated style transfer via the `stylize` command. Manual workflow doesn't need this.
+Only needed if using the `gemini` backend instead of the default local SD engine.
 
 1. Get a free key from https://aistudio.google.com/apikey
-2. Set it:
+2. Create a `.env` file in the project root:
    ```bash
-   export GEMINI_API_KEY=your_key_here
+   echo 'GEMINI_API_KEY=your_key_here' > .env
    ```
 
-Free tier gives ~15 requests/minute — plenty for keyframe-based stylization.
+### LoRA weights (optional)
+
+LoRAs enhance style quality but are not required — the engine falls back to prompt-only stylization without them.
+
+Download `.safetensors` files from CivitAI and place them in `models/loras/`:
+
+| Style | File | Source |
+|---|---|---|
+| Spiderverse | `spiderverse.safetensors` | [CivitAI #68838](https://civitai.com/models/68838) |
+| Pokemon | `pokemon.safetensors` | [CivitAI #26116](https://civitai.com/models/26116) |
+| Ghibli | `ghibli.safetensors` | [CivitAI #6526](https://civitai.com/models/6526) |
+| Comic Book | `comics.safetensors` | [CivitAI #62100](https://civitai.com/models/62100) |
+| Pixel Art | `pixel_art.safetensors` | [CivitAI #111134](https://civitai.com/models/111134) |
+| Ukiyo-e | `ukiyo_e.safetensors` | [CivitAI #6308](https://civitai.com/models/6308) |
 
 ---
 
@@ -59,10 +75,13 @@ uv run python -m src.cli highlights -d 4
 # 3. Extract frames and keyframes
 uv run python -m src.cli process data/raw/2026/PL/Arsenal_-_Chelsea/clip.mp4
 
-# 4a. Auto-stylize keyframes via Gemini API
+# 4a. Auto-stylize keyframes locally (default — no API key needed)
 uv run python -m src.cli stylize clip_name --style spiderverse
 
-# 4b. OR manually: upload keyframes from data/keyframes/<name>/ to Gemini,
+# 4b. OR use Gemini API backend
+uv run python -m src.cli stylize clip_name --style spiderverse --backend gemini
+
+# 4c. OR manually: upload keyframes from data/keyframes/<name>/ to any image tool,
 #     save styled images to data/styled/<name>/spiderverse/ with same filenames
 
 # 5. Compose into video
@@ -175,21 +194,25 @@ uv run python -m src.cli process data/raw/.../long_clip_name.mp4 -n arsenal_chel
 
 **Understanding FPS and keyframe interval:**
 
-| Setting | 2 min clip | Frames | Keyframes | Style transfer time (Gemini free tier) |
-|---|---|---|---|---|
-| `-f 12 -k 12` (default) | 120s | 1440 | 120 | ~9 min |
-| `-f 12 -k 6` | 120s | 1440 | 240 | ~18 min |
-| `-f 24 -k 24` | 120s | 2880 | 120 | ~9 min |
-| `-f 8 -k 8` | 120s | 960 | 120 | ~9 min |
+| Setting | 2 min clip | Frames | Keyframes | Local SD (M2 Pro) | Gemini API |
+|---|---|---|---|---|---|
+| `-f 12 -k 12` (default) | 120s | 1440 | 120 | ~30 min | ~9 min |
+| `-f 12 -k 6` | 120s | 1440 | 240 | ~60 min | ~18 min |
+| `-f 24 -k 24` | 120s | 2880 | 120 | ~30 min | ~9 min |
+| `-f 8 -k 8` | 120s | 960 | 120 | ~30 min | ~9 min |
 
 Output:
 - `data/frames/<name>/` — all extracted frames
 - `data/keyframes/<name>/` — keyframes only (for style transfer or manual upload)
 
-### `stylize` — Apply animation style via Gemini API
+### `stylize` — Apply animation style to keyframes
 
-Sends each keyframe to Gemini with a style prompt and saves the generated image.
-Requires `GEMINI_API_KEY` environment variable or `--api-key` flag.
+Runs each keyframe through a style transfer engine. Two backends available:
+
+- **`local_sd`** (default) — Stable Diffusion 1.5 + ControlNet Canny + LoRA, runs entirely on your Mac via MPS. No API key needed. Models download automatically on first run (~3GB). ~15-20s per frame on M2 Pro.
+- **`gemini`** — Google's Gemini API. Requires `GEMINI_API_KEY` in `.env`.
+
+The engine supports **resume** — if interrupted, re-run the same command and it picks up where it left off.
 
 ```bash
 uv run python -m src.cli stylize [OPTIONS] CLIP_NAME
@@ -199,28 +222,40 @@ uv run python -m src.cli stylize [OPTIONS] CLIP_NAME
 |---|---|---|---|
 | `CLIP_NAME` (argument) | — | *required* | Name of a processed clip |
 | `--style` | `-s` | `spiderverse` | Style preset (see `styles` command) |
-| `--api-key` | — | `$GEMINI_API_KEY` | Gemini API key |
+| `--backend` | `-b` | `local_sd` | Engine: `local_sd` (Mac) or `gemini` (API) |
 | `--all-frames` | — | `false` | Stylize ALL frames, not just keyframes |
-| `--model` | `-m` | `gemini-2.0-flash-exp` | Gemini model ID |
-| `--delay` | — | `4.5` | Seconds between API requests |
+| `--resolution` | `-r` | `512` | Output resolution for local_sd (512 recommended for 16GB RAM) |
+| `--seed` | — | — | Random seed for reproducible results (local_sd only) |
 
 ```bash
-# Spiderverse style (default)
+# Spiderverse style with local SD (default)
 uv run python -m src.cli stylize my_clip
 
 # Ghibli style
 uv run python -m src.cli stylize my_clip -s ghibli
 
-# All frames (slower but smoother result)
-uv run python -m src.cli stylize my_clip -s pokemon --all-frames
+# Use Gemini API instead
+uv run python -m src.cli stylize my_clip -s pokemon -b gemini
 
-# Faster with paid tier (lower delay between requests)
-uv run python -m src.cli stylize my_clip -s comic_book --delay 1.0
+# All frames (slower but smoother result)
+uv run python -m src.cli stylize my_clip -s pixel_art --all-frames
+
+# Reproducible results with a seed
+uv run python -m src.cli stylize my_clip -s comic_book --seed 42
 ```
 
 Output: `data/styled/<clip_name>/<style>/`
 
-**Manual style transfer (no API key needed):**
+**How local SD works:**
+
+The local engine uses a Stable Diffusion 1.5 img2img pipeline with:
+- **ControlNet Canny** — extracts edge maps to preserve composition and player positions
+- **LoRA** (optional) — style-specific fine-tuned weights for stronger stylization
+- **Prompt engineering** — style-specific prompts with trigger words and negative prompts
+
+All parameters (denoising strength, ControlNet scale, guidance scale, etc.) are tuned per style in `config/styles.yaml`.
+
+**Manual style transfer (no API key or GPU needed):**
 
 Skip the `stylize` command entirely. Instead:
 
@@ -298,10 +333,23 @@ Edit `config/styles.yaml`:
 ```yaml
 styles:
   my_style:
-    prompt: "Redraw this image in [your style description]. Keep the exact same composition, player positions, and action."
+    prompt: "Redraw this image in [your style]. Keep the exact same composition, player positions, and action."
+    negative_prompt: "photorealistic, blurry, low quality, watermark, text"
+    lora: "my_lora.safetensors"        # optional — place in models/loras/
+    lora_weight: 0.85
+    trigger_words: "my style trigger"   # prepended to prompt for SD
+    denoising_strength: 0.65           # 0.5 = subtle, 0.75 = heavy stylization
+    controlnet_conditioning_scale: 0.8  # higher = more structure preservation
+    num_inference_steps: 20
+    guidance_scale: 7.5
     fps: 12
     keyframe_interval: 12
 ```
+
+**Tuning tips:**
+- `denoising_strength`: 0.5-0.6 for subtle styles (Ghibli), 0.7-0.8 for heavy (Spiderverse, Pixel Art)
+- `controlnet_conditioning_scale`: 0.7-0.85. Higher preserves more of the original layout
+- LoRAs are optional — the engine works with prompt-only if the file is missing
 
 ---
 
@@ -319,12 +367,17 @@ arsenal-style-transfer/
 │   │   ├── scenes.py             # Scene detection (PySceneDetect)
 │   │   └── keyframes.py          # Keyframe selection and export
 │   ├── stylize/
+│   │   ├── engine.py             # Abstract StyleEngine interface
+│   │   ├── factory.py            # Engine factory (local_sd, gemini)
+│   │   ├── local_sd.py           # SD 1.5 + ControlNet + LoRA on MPS
 │   │   ├── gemini.py             # Gemini API style transfer
-│   │   └── presets.py            # Style preset loader
+│   │   └── presets.py            # Style preset loader (→ StyleConfig)
 │   └── compose/
 │       └── assembler.py          # Video assembly, audio merge, side-by-side
 ├── config/
-│   └── styles.yaml               # Style definitions (prompts + settings)
+│   └── styles.yaml               # Style definitions (prompts + SD params)
+├── models/
+│   └── loras/                    # Optional LoRA weights (.safetensors)
 ├── data/                          # All local data (gitignored)
 │   ├── raw/                      # Downloaded clips: year/competition/match/
 │   ├── frames/                   # All extracted frames
@@ -371,10 +424,9 @@ uv run python -m src.cli process data/raw/2026/PL/Arsenal_-_Chelsea/SALIBA_TIMBE
 # → data/frames/arsenal_chelsea/    (1440 frames)
 # → data/keyframes/arsenal_chelsea/ (120 keyframes)
 
-# Step 3: Stylize
-export GEMINI_API_KEY=your_key
+# Step 3: Stylize (runs locally on your Mac, no API key needed)
 uv run python -m src.cli stylize arsenal_chelsea -s spiderverse
-# → data/styled/arsenal_chelsea/spiderverse/ (120 styled frames)
+# → data/styled/arsenal_chelsea/spiderverse/ (120 styled frames, ~30 min on M2 Pro)
 
 # Step 4: Compose video
 uv run python -m src.cli compose arsenal_chelsea -s spiderverse

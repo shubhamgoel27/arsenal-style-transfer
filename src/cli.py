@@ -1,8 +1,29 @@
 """CLI for Arsenal Style Transfer pipeline."""
 
+import os
 from pathlib import Path
 
 import typer
+
+
+def _load_dotenv():
+    """Load .env file from project root if it exists."""
+    env_file = Path(".env")
+    if not env_file.exists():
+        return
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip("'\"")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+_load_dotenv()
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -204,47 +225,55 @@ def stylize(
         "spiderverse", "-s", "--style",
         help="Style preset name (run 'styles' to see all)",
     ),
-    api_key: str = typer.Option(
-        None, "--api-key", envvar="GEMINI_API_KEY",
-        help="Gemini API key (or set GEMINI_API_KEY env var)",
+    backend: str = typer.Option(
+        "local_sd", "-b", "--backend",
+        help="Style engine: local_sd (runs locally on Mac), gemini (API)",
     ),
     all_frames: bool = typer.Option(
         False, "--all-frames",
-        help="Stylize ALL frames instead of keyframes only (slow, expensive)",
+        help="Stylize ALL frames instead of keyframes only (slower)",
     ),
-    model: str = typer.Option(
-        "gemini-2.0-flash-exp", "-m", "--model",
-        help="Gemini model ID",
+    resolution: int = typer.Option(
+        512, "-r", "--resolution",
+        help="Output resolution for local_sd (512 recommended for 16GB RAM)",
     ),
-    delay: float = typer.Option(
-        4.5, "--delay",
-        help="Seconds between API requests (free tier: 15 RPM = 4s delay)",
+    seed: int = typer.Option(
+        None, "--seed",
+        help="Random seed for reproducible results (local_sd only)",
     ),
 ):
-    """Apply an animation style to keyframes using the Gemini API.
+    """Apply an animation style to keyframes.
 
-    Sends each keyframe image to Gemini with a style prompt and saves
-    the generated image. Free tier supports ~15 requests/minute.
+    Uses a local Stable Diffusion pipeline (default) or Gemini API.
 
-    For manual style transfer (e.g. uploading to Gemini in the browser),
-    skip this command and place your styled frames directly in
-    data/styled/<clip_name>/<style>/ with matching filenames.
+    [bold]local_sd[/bold] runs SD 1.5 + ControlNet + LoRA entirely on your Mac.
+    Models are downloaded automatically on first run (~3GB).
+    Processes ~5-15 sec/frame on M2 Pro. No API key needed.
+
+    [bold]gemini[/bold] uses Google's Gemini API (requires GEMINI_API_KEY in .env).
+
+    For manual style transfer, skip this command and place styled frames
+    directly in data/styled/<clip_name>/<style>/ with matching filenames.
 
     [dim]Examples:[/dim]
-      [dim]Default:     {run} stylize my_clip --style spiderverse[/dim]
-      [dim]Ghibli:      {run} stylize my_clip --style ghibli[/dim]
-      [dim]All frames:  {run} stylize my_clip --style pokemon --all-frames[/dim]
-      [dim]Custom model:{run} stylize my_clip --model gemini-2.0-flash-exp[/dim]
+      [dim]Local SD:  {run} stylize my_clip -s spiderverse[/dim]
+      [dim]Gemini:    {run} stylize my_clip -s ghibli -b gemini[/dim]
+      [dim]All frames:{run} stylize my_clip -s pokemon --all-frames[/dim]
+      [dim]With seed: {run} stylize my_clip -s comic_book --seed 42[/dim]
     """.format(run=_RUN)
-    from src.stylize.gemini import stylize_keyframes
-    from src.stylize.presets import get_style_prompt, list_styles
+    import time
+    from src.stylize.factory import create_engine
+    from src.stylize.presets import get_style_config, list_styles
 
     try:
-        prompt = get_style_prompt(style)
+        style_config = get_style_config(style)
     except ValueError:
         console.print(f"[red]Unknown style '{style}'.[/red]")
         console.print(f"[dim]Available: {', '.join(list_styles())}[/dim]")
         raise typer.Exit(1)
+
+    if seed is not None:
+        style_config.seed = seed
 
     source_dir = DATA_DIR / ("frames" if all_frames else "keyframes") / clip_name
 
@@ -258,28 +287,90 @@ def stylize(
         console.print(f"[red]No frames in {source_dir}[/red]")
         raise typer.Exit(1)
 
-    est_minutes = len(frames) * delay / 60
+    output_dir = DATA_DIR / "styled" / clip_name / style
+
+    # Check what's already done (resume support)
+    already_done = sum(
+        1 for f in frames
+        if (output_dir / f.name).exists() and (output_dir / f.name).stat().st_size > 0
+    )
+    remaining = len(frames) - already_done
+
     console.print(Panel(
         f"  Style:      [bold]{style}[/bold]\n"
-        f"  Prompt:     {prompt[:70]}...\n"
-        f"  Frames:     {len(frames)}\n"
-        f"  Source:     {'all frames' if all_frames else 'keyframes only'}\n"
-        f"  Model:      {model}\n"
-        f"  Est. time:  ~{est_minutes:.0f} min",
+        f"  Backend:    {backend}\n"
+        f"  Prompt:     {style_config.prompt[:60]}...\n"
+        f"  Frames:     {len(frames)} total, {remaining} to process"
+        + (f" ({already_done} done)" if already_done else "") + "\n"
+        f"  Source:     {'all frames' if all_frames else 'keyframes only'}"
+        + (f"\n  Resolution: {resolution}px" if backend == "local_sd" else ""),
         title="Stylize",
     ))
 
-    output_dir = DATA_DIR / "styled" / clip_name / style
-    styled = stylize_keyframes(
-        keyframes=frames,
-        style_prompt=prompt,
-        output_dir=output_dir,
-        api_key=api_key,
-        model=model,
-        delay_seconds=delay,
-    )
+    if remaining == 0:
+        console.print("[green]All frames already styled![/green]")
+        _print_next_step("stylize", None, clip_name=clip_name, style=style)
+        return
 
-    console.print(f"\n  Styled frames: [bold]{output_dir}[/bold] ({len(styled)}/{len(frames)} done)")
+    # Create engine
+    try:
+        if backend == "local_sd":
+            engine = create_engine("local_sd", resolution=resolution)
+        elif backend == "gemini":
+            engine = create_engine("gemini")
+        else:
+            console.print(f"[red]Unknown backend '{backend}'. Use: local_sd, gemini[/red]")
+            raise typer.Exit(1)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    # Load style
+    engine.load(style_config)
+
+    # Process frames
+    output_dir.mkdir(parents=True, exist_ok=True)
+    styled_count = already_done
+    failed_count = 0
+
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeRemainingColumn
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        task = progress.add_task("Stylizing...", total=remaining)
+
+        for frame in frames:
+            output_path = output_dir / frame.name
+
+            # Skip already done
+            if output_path.exists() and output_path.stat().st_size > 0:
+                continue
+
+            result = engine.stylize_frame(frame, output_path)
+            if result.success:
+                styled_count += 1
+            else:
+                failed_count += 1
+                console.print(f"[red]Failed {frame.name}: {result.error}[/red]")
+
+            progress.update(task, advance=1)
+
+            # Small delay for API backends
+            if backend == "gemini":
+                time.sleep(5.0)
+
+    engine.unload()
+
+    console.print(
+        f"\n[green]Done: {styled_count}/{len(frames)} styled"
+        + (f", {failed_count} failed" if failed_count else "")
+        + f"[/green]\n  Output: [bold]{output_dir}[/bold]"
+    )
     _print_next_step("stylize", None, clip_name=clip_name, style=style)
 
 
