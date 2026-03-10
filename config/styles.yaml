@@ -1,0 +1,30 @@
+styles:
+  spiderverse:
+    prompt: "Redraw this image in Spider-Man Into the Spider-Verse animation style. Use bold ink outlines, halftone dot patterns, ink splatter effects, vibrant saturated colors, and comic book Ben-Day dots. Keep the exact same composition, player positions, and action."
+    fps: 12
+    keyframe_interval: 12  # stylize every Nth frame
+
+  pokemon:
+    prompt: "Redraw this image in Pokemon anime style. Use flat cel-shaded colors, bold black outlines, simple clean shapes, bright saturated palette. Keep the exact same composition, player positions, and action."
+    fps: 12
+    keyframe_interval: 12
+
+  ghibli:
+    prompt: "Redraw this image in Studio Ghibli animation style. Use soft watercolor textures, warm gentle lighting, painterly backgrounds, subtle color gradients. Keep the exact same composition, player positions, and action."
+    fps: 12
+    keyframe_interval: 12
+
+  comic_book:
+    prompt: "Redraw this image as a dramatic comic book panel. Use thick black ink outlines, bold colors, strong shadows, action lines, dramatic lighting. Keep the exact same composition, player positions, and action."
+    fps: 12
+    keyframe_interval: 12
+
+  pixel_art:
+    prompt: "Redraw this image as 16-bit pixel art in retro video game style. Use a limited color palette, visible pixels, clean pixel-perfect shapes. Keep the exact same composition, player positions, and action."
+    fps: 12
+    keyframe_interval: 12
+
+  ukiyo_e:
+    prompt: "Redraw this image as a Japanese ukiyo-e woodblock print. Use flat color areas, bold flowing outlines, traditional Japanese art composition. Keep the exact same composition, player positions, and action."
+    fps: 12
+    keyframe_interval: 12
